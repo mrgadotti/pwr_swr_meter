@@ -10,13 +10,15 @@
 // Internal ADC definitions
 #define ADC_FWD       A0
 #define ADC_REV       A1
-// Measure using DVM to correct value
+// Measure using DVM to correct value from Vref
 #define V_REF         3.251
 #define ADC_VREF      3.251
 #define ADC_BITS      4096
 #define ADC_RES       12
+// Smoothing factor (0 < alpha < 1)
+#define ALPHA         0.6
 // ((R1+R2) / R2) * Vo = Vi       
-// ((R1+R2) / R2)       
+// ADC scale -> ((R1+R2) / R2)       
 #define ADC_SCALE     4.09
 
 // Bridge definitions (1N5711)

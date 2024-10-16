@@ -100,9 +100,9 @@ float readAdcVolts(uint8_t channel) {
 }
 
 void measureValues() {
-  // filtered using a first-order IIR filter (smoothing filter)
-  fwdAdcVolts = (0.4 * fwdAdcVolts) + (0.6 * readAdcVolts(ADC_FWD));
-  revAdcVolts = (0.4 * revAdcVolts) + (0.6 * readAdcVolts(ADC_REV));
+  // Apply the exponential moving average formula
+  fwdAdcVolts = (ALPHA * readAdcVolts(ADC_FWD)) + ((1 - ALPHA) * fwdAdcVolts);
+  revAdcVolts = (ALPHA * readAdcVolts(ADC_REV)) + ((1 - ALPHA) * revAdcVolts);
   fwdVp = ((fwdAdcVolts * ADC_SCALE) * TURNS_RATIO) + DIODE_DROP_F;
   revVp = ((revAdcVolts * ADC_SCALE) * TURNS_RATIO) + DIODE_DROP_R;
 
