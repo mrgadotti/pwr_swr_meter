@@ -28,6 +28,10 @@
 
 U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
+#if SERIAL
+HardwareSerial Serial3(PB11, PB10);
+#endif
+
 // Variables for button debounce
 uint8_t buttonState;
 uint8_t lastButtonState = LOW;
@@ -57,6 +61,9 @@ void setupIo() {
   pinMode(ADC_FWD, INPUT);
   pinMode(ADC_REV, INPUT);
   analogReadResolution(ADC_RES);
+  #if SERIAL
+  Serial3.begin(9600);
+  #endif
 }
 
 void readButton() {
@@ -96,6 +103,7 @@ void startupMessage() {
 }
 
 float readAdcVolts(uint8_t channel) {
+  // Prevent divide-by-zero
   return (analogRead(channel) * ADC_VREF) / ADC_BITS;
 }
 
@@ -106,6 +114,9 @@ void measureValues() {
   fwdVp = ((fwdAdcVolts * ADC_SCALE) * TURNS_RATIO) + DIODE_DROP_F;
   revVp = ((revAdcVolts * ADC_SCALE) * TURNS_RATIO) + DIODE_DROP_R;
 
+  // fwdVp = M_FWD_VP * fwdVp + C_FWD_VP;
+  // revVp = M_REV_VP * revVp + C_REV_VP;
+
   fwdPwr = pow(fwdVp, 2) / 100;
   revPwr = pow(revVp, 2) / 100;
   fwdPwrPep = pow(fwdVp, 2) / 50;
@@ -113,6 +124,7 @@ void measureValues() {
   // TODO: If revPwr > fwdPwr, error, set to 1.0
   const float reflection_ratio = sqrt(revPwr / fwdPwr);
   swr = (1.0f + reflection_ratio) / (1.0f - reflection_ratio);
+  swr = constrain(swr, 1.0, 99.9);
 }
 
 void drawBar(uint8_t progress, uint8_t y, uint8_t h) {
@@ -300,6 +312,7 @@ void setup(void) {
   startupMessage();
 }
 
+unsigned long lastSerial = 0;
 void loop(void) {
   readButton();
   measureValues();
@@ -320,4 +333,15 @@ void loop(void) {
       drawPwrPepSwr();
       break;
   }
+  #if SERIAL
+  if ((millis() - lastSerial) > 50) {
+    // Plot on Arduino IDE
+    Serial3.print("Variable_1:");
+    Serial3.print(fwdVp);
+    Serial3.print(",");
+    Serial3.print("Variable_2:");
+    Serial3.println(revVp);
+    lastSerial = millis();
+  }
+  #endif
 }
