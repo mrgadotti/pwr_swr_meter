@@ -30,26 +30,27 @@ U8G2_SH1106_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE);
 
 #if SERIAL
 HardwareSerial Serial3(PB11, PB10);
+unsigned long lastSerial = 0;
 #endif
 
-// Variables for button debounce
-uint8_t buttonState;
-uint8_t lastButtonState = LOW;
-unsigned long lastDebounceTime = 0;
-const unsigned long debounceDelay = 50;
+struct ButtonDebounce debounceBtState = { LOW, LOW, 0, 50 };
 
 // FST from OLED screen (change display)
 uint8_t screenState = 0;
 
-// measured values
-float fwdAdcVolts = 0.0;
-float revAdcVolts = 0.0;
-float fwdVp = 0.0;
-float revVp = 0.0;
-float fwdPwr = 0.0;
-float fwdPwrPep = 0.0;
-float revPwr = 0.0;
-float swr = 0.0;
+// Measured values
+struct MeasuredValues {
+    float fwdAdcVolts;
+    float revAdcVolts;
+    float fwdVp;
+    float revVp;
+    float fwdPwr;
+    float fwdPwrPep;
+    float revPwr;
+    float swr;
+};
+
+struct MeasuredValues measuredValues = {0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0};
 
 // map function using float values
 float mapFloat(float x, float in_min, float in_max, float out_min, float out_max) {
@@ -60,7 +61,9 @@ void setupIo() {
   pinMode(SCREEN_BT_PIN, INPUT_PULLUP);
   pinMode(ADC_FWD, INPUT);
   pinMode(ADC_REV, INPUT);
+
   analogReadResolution(ADC_RES);
+
   #if SERIAL
   Serial3.begin(9600);
   #endif
@@ -68,19 +71,19 @@ void setupIo() {
 
 void readButton() {
   uint8_t reading = digitalRead(SCREEN_BT_PIN);
-  if (reading != lastButtonState) {
-    lastDebounceTime = millis();
+  if (reading != debounceBtState.lastButtonState) {
+    debounceBtState.lastDebounceTime = millis();
   }
-  if ((millis() - lastDebounceTime) > debounceDelay) {
-    if (reading != buttonState) {
-      buttonState = reading;
-      if (buttonState == LOW) {
+  if ((millis() - debounceBtState.lastDebounceTime) > debounceBtState.debounceDelay) {
+    if (reading != debounceBtState.buttonState) {
+      debounceBtState.buttonState = reading;
+      if (debounceBtState.buttonState == LOW) {
         screenState += 1;
         if (screenState > 4) screenState = 0;
       }
     }
   }
-  lastButtonState = reading;
+  debounceBtState.lastButtonState = reading;
 }
 
 void startOledDisplay() {
@@ -107,24 +110,24 @@ float readAdcVolts(uint8_t channel) {
   return (analogRead(channel) * ADC_VREF) / ADC_BITS;
 }
 
-void measureValues() {
-  // Apply the exponential moving average formula
-  fwdAdcVolts = (ALPHA * readAdcVolts(ADC_FWD)) + ((1 - ALPHA) * fwdAdcVolts);
-  revAdcVolts = (ALPHA * readAdcVolts(ADC_REV)) + ((1 - ALPHA) * revAdcVolts);
-  fwdVp = ((fwdAdcVolts * ADC_SCALE) * TURNS_RATIO) + DIODE_DROP_F;
-  revVp = ((revAdcVolts * ADC_SCALE) * TURNS_RATIO) + DIODE_DROP_R;
+void updateMeasuredValues() {
+  // Apply the exponential moving average
+  measuredValues.fwdAdcVolts = (ALPHA * readAdcVolts(ADC_FWD)) + ((1 - ALPHA) * measuredValues.fwdAdcVolts);
+  measuredValues.revAdcVolts = (ALPHA * readAdcVolts(ADC_REV)) + ((1 - ALPHA) * measuredValues.revAdcVolts);
+  measuredValues.fwdVp = ((measuredValues.fwdAdcVolts * ADC_SCALE) * TURNS_RATIO) + DIODE_DROP_F;
+  measuredValues.revVp = ((measuredValues.revAdcVolts * ADC_SCALE) * TURNS_RATIO) + DIODE_DROP_R;
+  
+  // Use gradient and intercept to increase precision
+  // measuredValues.fwdVp = M_FWD_VP * measuredValues.fwdVp + C_FWD_VP;
+  // measuredValues.revVp = M_REV_VP * measuredValues.revVp + C_REV_VP;
 
-  // fwdVp = M_FWD_VP * fwdVp + C_FWD_VP;
-  // revVp = M_REV_VP * revVp + C_REV_VP;
+  measuredValues.fwdPwr = pow(measuredValues.fwdVp, 2) / 100;
+  measuredValues.revPwr = pow(measuredValues.revVp, 2) / 100;
+  measuredValues.fwdPwrPep = pow(measuredValues.fwdVp, 2) / 50;
 
-  fwdPwr = pow(fwdVp, 2) / 100;
-  revPwr = pow(revVp, 2) / 100;
-  fwdPwrPep = pow(fwdVp, 2) / 50;
-
-  // TODO: If revPwr > fwdPwr, error, set to 1.0
-  const float reflection_ratio = sqrt(revPwr / fwdPwr);
-  swr = (1.0f + reflection_ratio) / (1.0f - reflection_ratio);
-  swr = constrain(swr, 1.0, 99.9);
+  const float reflection_ratio = sqrt(measuredValues.revPwr / measuredValues.fwdPwr);
+  measuredValues.swr = (1.0f + reflection_ratio) / (1.0f - reflection_ratio);
+  measuredValues.swr = constrain(measuredValues.swr, 1.0, 99.9);
 }
 
 void drawBar(uint8_t progress, uint8_t y, uint8_t h) {
@@ -164,8 +167,8 @@ void drawPwr() {
   u8g2.drawStr(100, 18, "120");
 
   u8g2.setCursor(30, 18);
-  u8g2.print(fwdPwr, 2);
-  uint16_t pwr = (fwdPwr > 120.0) ? 120 : fwdPwr;
+  u8g2.print(measuredValues.fwdPwr, 2);
+  uint16_t pwr = (measuredValues.fwdPwr > 120.0) ? 120 : measuredValues.fwdPwr;
   uint8_t progress = map(pwr, 0, 120, 0, 128);
   drawBar(progress, 21, 7);
 }
@@ -175,8 +178,8 @@ void drawPwrPep() {
   u8g2.drawStr(100, 18, "120");
 
   u8g2.setCursor(30, 18);
-  u8g2.print(fwdPwrPep, 2);
-  uint16_t pwr = (fwdPwrPep > 120.0) ? 120 : fwdPwrPep;
+  u8g2.print(measuredValues.fwdPwrPep, 2);
+  uint16_t pwr = (measuredValues.fwdPwrPep > 120.0) ? 120 : measuredValues.fwdPwrPep;
   uint8_t progress = map(pwr, 0, 120, 0, 128);
   drawBar(progress, 21, 7);
 }
@@ -186,8 +189,8 @@ void drawRev() {
   u8g2.drawStr(100, 48, "120");
 
   u8g2.setCursor(30, 48);
-  u8g2.print(revPwr, 2);
-  uint16_t pwr = (revPwr > 120.0) ? 120 : revPwr;
+  u8g2.print(measuredValues.revPwr, 2);
+  uint16_t pwr = (measuredValues.revPwr > 120.0) ? 120 : measuredValues.revPwr;
   uint8_t progress = map(pwr, 0, 120, 0, 128);
   drawBar(progress, 51, 7);
 }
@@ -195,9 +198,9 @@ void drawRev() {
 void drawSwr() {
   u8g2.drawStr(0, 48, "SWR ");
   u8g2.setCursor(30, 48);
-  u8g2.print(swr, 2);
+  u8g2.print(measuredValues.swr, 2);
   // test swr is behind 1.0 and 3.0
-  uint8_t progress = mapFloat((swr > 3.0) ? 3.0 : swr, 1.0, 3.0, 0, 128);
+  uint8_t progress = mapFloat((measuredValues.swr > 3.0) ? 3.0 : measuredValues.swr, 1.0, 3.0, 0, 128);
   drawSwrBar(progress, 51, 7);
 }
 
@@ -207,8 +210,8 @@ void drawPwrBig() {
   u8g2.drawStr(0, 18, "FWD ");
 
   u8g2.setCursor(50, 18);
-  u8g2.print(fwdPwr, 2);
-  uint16_t pwr = (fwdPwr > 120.0) ? 120 : fwdPwr;
+  u8g2.print(measuredValues.fwdPwr, 2);
+  uint16_t pwr = (measuredValues.fwdPwr > 120.0) ? 120 : measuredValues.fwdPwr;
   uint8_t progress = map(pwr, 0, 120, 0, 128);
   drawBar(progress, 35, 15);
   u8g2.sendBuffer();
@@ -284,24 +287,24 @@ void printValues() {
   // FWD
   u8g2.drawStr(0, 18, "F ");
   u8g2.setCursor(25, 18);
-  u8g2.print(fwdPwr, 1);
+  u8g2.print(measuredValues.fwdPwr, 1);
   u8g2.setCursor(78, 18);
-  u8g2.print(fwdVp, 2);
+  u8g2.print(measuredValues.fwdVp, 2);
   u8g2.setCursor(0, 31);
-  u8g2.print(fwdAdcVolts, 3);
+  u8g2.print(measuredValues.fwdAdcVolts, 3);
   u8g2.print("V");
 
   // REV
   u8g2.drawStr(0, 48, "R ");
   u8g2.setCursor(25, 48);
-  u8g2.print(revPwr, 1);
+  u8g2.print(measuredValues.revPwr, 1);
   u8g2.setCursor(78, 48);
-  u8g2.print(revVp, 2);
+  u8g2.print(measuredValues.revVp, 2);
   u8g2.setCursor(0, 61);
-  u8g2.print(revAdcVolts, 3);
+  u8g2.print(measuredValues.revAdcVolts, 3);
   u8g2.print("V");
   u8g2.setCursor(63, 61);
-  u8g2.print(swr, 2);
+  u8g2.print(measuredValues.swr, 2);
 
   u8g2.sendBuffer();
 }
@@ -312,10 +315,9 @@ void setup(void) {
   startupMessage();
 }
 
-unsigned long lastSerial = 0;
 void loop(void) {
   readButton();
-  measureValues();
+  updateMeasuredValues();
   switch (screenState) {
     case 0:
       drawPwrSwr();
@@ -337,10 +339,10 @@ void loop(void) {
   if ((millis() - lastSerial) > 50) {
     // Plot on Arduino IDE
     Serial3.print("Variable_1:");
-    Serial3.print(fwdVp);
+    Serial3.print(measuredValues.fwdVp);
     Serial3.print(",");
     Serial3.print("Variable_2:");
-    Serial3.println(revVp);
+    Serial3.println(measuredValues.revVp);
     lastSerial = millis();
   }
   #endif
